@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import ImageRecord
 from app.core.ai_service import AIService
-from app.core.dependencies import get_current_user
 import os
 from datetime import datetime
 import logging
@@ -23,33 +22,32 @@ messenger_processing_active = False
 
 @router.post("/messenger", response_model=dict)
 async def toggle_messenger_processing(
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     """切换 Messenger 图片卡路里分析状态"""
-    global messenger_processing_active  # 确保使用全局变量
+    global messenger_processing_active
     
     try:
         # 切换状态
         messenger_processing_active = not messenger_processing_active
-        logger.info(f"Calorie analysis active status changed to: {messenger_processing_active}")  # 添加日志
+        logger.info(f"Calorie analysis active status changed to: {messenger_processing_active}")
         
         if messenger_processing_active:
-            logger.info(f"Started messenger calorie analysis for user {current_user.id}")
+            logger.info("Started messenger calorie analysis")
             return {
                 "status": "success",
                 "message": "Messenger calorie analysis started",
                 "is_active": True,
-                "process_type": "calorie",  # 添加处理类型标识
+                "process_type": "calorie",
                 "result": "✅ 已开启卡路里分析功能\n- 请在 Messenger 页面运行书签脚本\n- 新图片将自动进行卡路里分析\n- 再次点击此按钮可停止处理"
             }
         else:
-            logger.info(f"Stopped messenger calorie analysis for user {current_user.id}")
+            logger.info("Stopped messenger calorie analysis")
             return {
                 "status": "success",
                 "message": "Messenger calorie analysis stopped",
                 "is_active": False,
-                "process_type": None,  # 清除处理类型
+                "process_type": None,
                 "result": "⏹️ 已停止卡路里分析功能\n- 书签脚本将停止处理新图片\n- 再次点击此按钮可重新开启"
             }
             
@@ -63,11 +61,10 @@ async def toggle_messenger_processing(
 @router.post("/upload", response_model=dict)
 async def process_uploaded_image(
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     """处理上传的图片进行卡路里分析"""
-    logger.info(f"Processing uploaded image for user {current_user.id}")
+    logger.info("Processing uploaded image")
     
     try:
         # 确保 uploads 目录存在
@@ -75,7 +72,7 @@ async def process_uploaded_image(
         
         # 生成文件名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{current_user.id}_{timestamp}_{file.filename}"
+        filename = f"{timestamp}_{file.filename}"
         file_path = os.path.join("uploads", filename)
         
         # 保存文件
@@ -94,8 +91,7 @@ async def process_uploaded_image(
                 url=file_path,
                 source="upload",
                 status="processing",
-                process_type="calorie",
-                user_id=current_user.id
+                process_type="calorie"
             )
             db.add(record)
             db.commit()

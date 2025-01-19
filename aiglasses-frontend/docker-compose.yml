@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    environment:
+      - NODE_ENV=production
+    networks:
+      - aiglasses-network
+    depends_on:
+      - backend
+
+  backend:
+    image: aiglasses-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=production
+    networks:
+      - aiglasses-network
+
+networks:
+  aiglasses-network:
+    driver: bridge 

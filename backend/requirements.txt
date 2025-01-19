@@ -5,8 +5,8 @@ python-multipart>=0.0.5
 
 # 数据库
 SQLAlchemy==1.4.23
-# pymysql==1.0.2  # 注释掉 pymysql
-mysqlclient==2.1.1  # 使用 mysqlclient 替代
+pymysql==1.0.2  # 注释掉 pymysql
+# mysqlclient==2.1.1  # 使用 mysqlclient 替代
 
 # 认证
 python-jose[cryptography]>=3.3.0
