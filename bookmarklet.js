@@ -44,19 +44,67 @@ javascript: (function() {
 
     function sendImageUrl(imageUrl) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-                type: 'image_url',
-                url: imageUrl
-            }));
-            console.log('📤 已发送图片URL到后端');
+            if (!window.retryCount) {
+                window.retryCount = {};
+            }
+            
+            const normalizedUrl = normalizeUrl(imageUrl);
+            if (!window.retryCount[normalizedUrl]) {
+                window.retryCount[normalizedUrl] = 0;
+            }
+            
+            if (window.retryCount[normalizedUrl] < 3) {
+                console.log(`🔄 正在发送图片 (${currentProcessType}功能) - 重试次数: ${window.retryCount[normalizedUrl]}`);
+                ws.send(JSON.stringify({
+                    type: 'image_url',
+                    url: imageUrl,
+                    retry: window.retryCount[normalizedUrl]
+                }));
+                window.retryCount[normalizedUrl]++;
+            } else {
+                console.log('⚠️ 尝试Base64方式发送图片...');
+                convertToBase64(imageUrl);
+            }
         } else {
-            console.log('⚠️ WebSocket未连接，图片将在连接恢复后发送');
-            // 将图片URL存储到待发送队列
             if (!window.pendingImages) {
                 window.pendingImages = new Set();
             }
             window.pendingImages.add(imageUrl);
+            console.log('⚠️ WebSocket未连接，图片已加入待处理队列');
         }
+    }
+
+    function convertToBase64(imageUrl) {
+        console.log(`🔄 开始处理图片: ${imageUrl}`);
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = function() {
+            console.log('✅ 图片加载成功，开始转换...');
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            
+            try {
+                const base64Data = canvas.toDataURL('image/jpeg', 0.8);
+                console.log('✅ 图片转换完成，正在发送...');
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'image_base64',
+                        data: base64Data,
+                        originalUrl: imageUrl
+                    }));
+                    console.log('📤 Base64数据已发送');
+                }
+            } catch (e) {
+                console.error('❌ 转换失败:', e);
+            }
+        };
+        img.onerror = function(e) {
+            console.error('❌ 图片加载失败:', e);
+        };
+        img.src = imageUrl;
     }
 
     function handleNewImage(node) {
@@ -111,123 +159,166 @@ javascript: (function() {
     });
 
     async function checkActiveProcessType() {
-        // 首先尝试从 localStorage 获取上次使用的类型
-        const lastType = localStorage.getItem('lastProcessType');
-        if (lastType) {
-            try {
-                const ws = new WebSocket(`ws://localhost:8000/api/v1/ws/${lastType}`);
-                const result = await new Promise((resolve) => {
-                    ws.onopen = () => {
-                        console.log(`正在检查${lastType}功能状态...`);
-                    };
-                    ws.onmessage = (e) => {
-                        const data = JSON.parse(e.data);
-                        if (data.type === 'status') {
-                            resolve(data.active);
-                        }
-                    };
-                    ws.onerror = () => resolve(false);
-                    // 添加超时处理
-                    setTimeout(() => resolve(false), 3000);
-                });
-                ws.close();
-                
-                if (result) {
-                    currentProcessType = lastType;
-                    console.log(`✅ 恢复上次使用的功能: ${lastType}`);
-                    return lastType;
-                }
-            } catch (e) {
-                console.log('上次使用的功能未激活，尝试其他功能');
-            }
-        }
-
-        // 检查其他类型
-        for (const type of processTypes) {
-            if (type === lastType) continue;
+        console.log('🔍 开始检查可用功能...');
+        
+        const TIMEOUT = 5000;  // 改为5秒
+        
+        const results = await Promise.all(processTypes.map(async (type) => {
+            console.log(`🔍 正在检查 ${type} 功能...`);
             try {
                 const ws = new WebSocket(`ws://localhost:8000/api/v1/ws/${type}`);
                 const result = await new Promise((resolve) => {
                     ws.onopen = () => {
-                        console.log(`正在检查${type}功能状态...`);
+                        console.log(`📡 正在连接 ${type} 功能...`);
                     };
                     ws.onmessage = (e) => {
                         const data = JSON.parse(e.data);
                         if (data.type === 'status') {
-                            resolve(data.active);
+                            const isActive = data.active;
+                            console.log(`📡 ${type} 功能状态: ${isActive ? '✅ 已激活' : '❌ 未激活'}`);
+                            resolve({ type, active: isActive });
                         }
                     };
-                    ws.onerror = () => resolve(false);
-                    setTimeout(() => resolve(false), 3000);
+                    ws.onerror = () => {
+                        console.log(`❌ ${type} 功能连接失败`);
+                        resolve({ type, active: false });
+                    };
+                    setTimeout(() => {
+                        console.log(`⏱️ ${type} 功能检查超时`);
+                        resolve({ type, active: false });
+                    }, TIMEOUT);
                 });
                 ws.close();
-                
-                if (result) {
-                    currentProcessType = type;
-                    localStorage.setItem('lastProcessType', type);
-                    console.log(`✅ 发现激活的功能: ${type}`);
-                    return type;
-                }
+                return result;
             } catch (e) {
-                continue;
+                console.log(`⚠️ ${type} 功能检查失败:`, e.message);
+                return { type, active: false };
             }
+        }));
+
+        const activeType = results.find(r => r.active);
+        if (activeType) {
+            currentProcessType = activeType.type;
+            localStorage.setItem('lastProcessType', activeType.type);
+            console.log(`✅ 使用功能: ${activeType.type}`);
+            return activeType.type;
         }
-        console.log('❌ 没有找到激活的功能');
+
+        console.log('❌ 没有找到可用的功能');
+        console.log('💡 请确保以下至少一个功能已激活:');
+        processTypes.forEach(type => {
+            console.log(`   - ${type}`);
+        });
         return null;
     }
 
     async function initWebSocket() {
         currentProcessType = await checkActiveProcessType();
         if (!currentProcessType) {
-            console.log('❌ 没有激活的功能');
+            console.log('❌ 启动失败: 没有找到可用的功能');
+            console.log('💡 请确保以下至少一个功能已激活:');
+            processTypes.forEach(type => {
+                console.log(`   - ${type}`);
+            });
             return;
         }
 
         const connectWebSocket = () => {
+            if (ws) {
+                try {
+                    ws.close();
+                } catch (e) {}
+            }
+
+            console.log(`🔌 正在连接 ${currentProcessType} 功能...`);
             ws = new WebSocket(`ws://localhost:8000/api/v1/ws/${currentProcessType}`);
             
             ws.onopen = () => {
-                console.log(`✅ WebSocket已连接 - 功能类型: ${currentProcessType}`);
+                console.log(`✅ 连接成功 - 当前功能: ${currentProcessType}`);
+                console.log(`📝 功能说明:`);
+                const descriptions = {
+                    'translate': '图片文字翻译',
+                    'calorie': '食物卡路里估算',
+                    'navigate': '导航避障分析'
+                };
+                console.log(`   - ${descriptions[currentProcessType] || currentProcessType}`);
                 handleNewImage(document.body);
             };
             
             ws.onclose = (event) => {
-                console.log('WebSocket已关闭:', event.code, event.reason || '未知原因');
-                // 如果不是主动关闭，则尝试重连
-                if (window.imageAnalysisRunning) {
-                    console.log('🔄 尝试重新连接...');
-                    setTimeout(connectWebSocket, 3000); // 3秒后重试
+                if (event.code !== 1000) {
+                    console.log(`🔄 连接断开，3秒后重试...`);
+                    if (window.imageAnalysisRunning) {
+                        setTimeout(connectWebSocket, 3000);
+                    }
+                } else {
+                    console.log('👋 连接已正常关闭');
                 }
             };
             
             ws.onerror = (error) => {
-                console.error('WebSocket错误:', error);
+                console.error('❌ 连接错误:', error);
             };
             
             ws.onmessage = (e) => {
                 try {
                     const data = JSON.parse(e.data);
-                    console.log('📥 收到服务器消息:', data);
-                    
-                    if (data.type === 'error' && data.message.includes('功能未激活')) {
-                        window.stopImageAnalysis();
-                        localStorage.removeItem('lastProcessType');
-                        console.log(`⚠️ ${currentProcessType}功能未激活，已停止分析`);
+                    if (data.type === 'error') {
+                        if (data.message.includes('功能未激活')) {
+                            window.stopImageAnalysis();
+                            localStorage.removeItem('lastProcessType');
+                            console.log(`⚠️ ${currentProcessType} 功能未激活，已停止`);
+                        } else {
+                            console.error('❌ 错误:', data.message);
+                        }
                     } else if (data.type === 'result') {
-                        const resultMessages = {
-                            'translate': '📝 翻译结果:',
-                            'calorie': '🍽️ 卡路里分析结果:',
-                            'navigate': '🚶 导航避障分析结果:'
-                        };
-                        console.log(resultMessages[currentProcessType], data.result);
+                        const imageUrl = data.originalUrl || data.url || '未知图片';
+                        // 根据不同功能显示不同的结果格式
+                        switch(currentProcessType) {
+                            case 'calorie':
+                                console.log(`
+🍽️ 卡路里分析结果
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📸 图片: ${imageUrl}
+📊 分析: ${data.result}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+                                break;
+                            case 'translate':
+                                console.log(`
+📝 翻译结果
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📸 图片: ${imageUrl}
+🔤 文本: ${data.result}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+                                break;
+                            case 'navigate':
+                                console.log(`
+🚶 导航分析结果
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📸 图片: ${imageUrl}
+🎯 建议: ${data.result}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+                                break;
+                            default:
+                                console.log(`
+✨ ${currentProcessType} 分析结果
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📸 图片: ${imageUrl}
+📊 结果: ${data.result}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+                        }
+                    } else if (data.type === 'status') {
+                        console.log(`📡 ${currentProcessType} 功能状态:`, data.active ? '✅ 已激活' : '❌ 未激活');
+                    } else {
+                        console.log('📨 收到消息:', data);
                     }
                 } catch (err) {
-                    console.error('消息处理错误:', err);
+                    console.error('❌ 消息处理错误:', err);
+                    console.error('原始消息:', e.data);
                 }
             };
         };
 
-        // 初始连接
         connectWebSocket();
     }
 

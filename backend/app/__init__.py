@@ -1,15 +1,11 @@
 from fastapi import FastAPI
-from .routes.image_processing import router as image_router
-from .routes import websocket, auth
+from .routes import router
 import pymysql
 
+app = FastAPI(title="AI Glasses API")
 
-app = FastAPI()
-
-# 注册路由
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(image_router, prefix="/api/v1")
-app.include_router(websocket.router) 
+# 注册主路由
+app.include_router(router, prefix="/api/v1")
 
 pymysql.install_as_MySQLdb()
 
